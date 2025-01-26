@@ -169,3 +169,13 @@ cython_debug/
 
 # PyPI configuration file
 .pypirc
+# .gitignore
+__pycache__/
+*.py[cod]
+*$py.class
+.env
+.venv
+config/*.env
+.DS_Store
+.idea/
+.vscode/
