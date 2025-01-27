@@ -16,6 +16,7 @@ services:
     volumes:
       - ./fast_api/app:/app/app
       - ./logs:/var/log
+      - ./logs/screenshots:/var/log/screenshots  # Mount screenshots directory
     ports:
       - "1099:8000"
     shm_size: '2gb'

@@ -5,7 +5,7 @@ RUN mkdir -p /app /scripts
 
 WORKDIR /app
 
-# Install system dependencies
+# Install system dependencies including fonts
 RUN apt-get update && apt-get install -y \
     curl \
     wget \
@@ -33,6 +33,12 @@ RUN apt-get update && apt-get install -y \
     libxrandr2 \
     xdg-utils \
     procps \
+    # Add font packages
+    fonts-dejavu \
+    fonts-dejavu-core \
+    fonts-dejavu-extra \
+    fonts-freefont-ttf \
+    fontconfig \
     --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
@@ -62,6 +68,7 @@ RUN echo '#!/bin/bash' > /scripts/docker-entrypoint.sh && \
     echo 'Xvfb :99 -screen 0 1920x1080x24 > /dev/null 2>&1 &' >> /scripts/docker-entrypoint.sh && \
     echo 'export DISPLAY=:99' >> /scripts/docker-entrypoint.sh && \
     echo 'sleep 1' >> /scripts/docker-entrypoint.sh && \
+    echo 'fc-cache -f -v' >> /scripts/docker-entrypoint.sh && \
     echo 'exec uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload --log-level debug' >> /scripts/docker-entrypoint.sh && \
     chmod +x /scripts/docker-entrypoint.sh
 
