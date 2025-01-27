@@ -18,53 +18,36 @@ class BrowserTask(BaseModel):
     headless: bool = True
 
 
-def clean_response(result):
-    """Clean the response to remove screenshots and unnecessary data."""
+def extract_title_and_summary(result: dict) -> tuple:
+    """Extract both the article title and summary from the browser result."""
+    title = None
+    summary = None
+
     if isinstance(result, dict):
-        # If it's a history result
+        # Get title from history
         if "history" in result:
-            cleaned_history = []
-            for step in result["history"]:
-                cleaned_step = {}
+            for step in reversed(result["history"]):
+                if "state" in step and "tabs" in step["state"]:
+                    for tab in step["state"]["tabs"]:
+                        if "title" in tab and tab["title"]:
+                            title = tab["title"]
+                            break
+                    if title:
+                        break
 
-                # Clean model output
-                if "model_output" in step:
-                    cleaned_step["model_output"] = {
-                        "current_state": step["model_output"]["current_state"],
-                        "action": step["model_output"]["action"],
-                    }
+        # Get summary from last done action
+        if "history" in result:
+            for step in reversed(result["history"]):
+                if "model_output" in step and "action" in step["model_output"]:
+                    for action in step["model_output"]["action"]:
+                        if isinstance(action, dict) and "done" in action:
+                            if "text" in action["done"]:
+                                summary = action["done"]["text"]
+                                break
+                    if summary:
+                        break
 
-                # Clean result information
-                if "result" in step:
-                    cleaned_step["result"] = [
-                        {
-                            k: v
-                            for k, v in r.items()
-                            if k not in ["screenshot"] and not isinstance(v, bytes)
-                        }
-                        for r in step["result"]
-                    ]
-
-                # Clean state information but remove screenshots
-                if "state" in step:
-                    cleaned_step["state"] = {
-                        k: v
-                        for k, v in step["state"].items()
-                        if k not in ["screenshot"]
-                    }
-
-                cleaned_history.append(cleaned_step)
-
-            return {"history": cleaned_history}
-
-        # Remove any screenshots or binary data
-        return {
-            k: v
-            for k, v in result.items()
-            if k not in ["screenshot"] and not isinstance(v, bytes)
-        }
-
-    return result
+    return title, summary
 
 
 @browser.post("/execute_task/")
@@ -98,20 +81,11 @@ async def execute_task(browser_task: BrowserTask):
             model=os.getenv("OPENAI_MODEL", "gpt-4"),
         )
 
-        """
-        {
-  "task": "go to https://news.google.com/home?hl=en-US&gl=US&ceid=US:en.  wait for page to load.  Go to search bar, type in Donald Trump and click enter.  Wait for page to load.  The click on the first article listed.  Wait for page to load.  Summarize the article in less than 20 words.",
-  "headless": true
-}
-        """
-        prompt = f"""Go to https://news.google.com/home?hl=en-US&gl=US&ceid=US:en.
-wait for page to load.
-Go to search bar, type in Donald Trump and click enter.
-Wait for page to load.
-The click on the first article listed.
-Wait for page to load.
-Summarize the article in less than 20 words."""
-
+        prompt = browser_task.task.strip()
+        # {
+        #   "task": "go to https://news.google.com/home?hl=en-US&gl=US&ceid=US:en.  wait for page to load.  Go to search bar, type in Donald Trump and click enter.  Wait for page to load.  The click on the first article listed.  Wait for page to load.  Summarize the article in less than 20 words.",
+        #   "headless": true
+        # }
         logger.info("Creating agent...")
         agent = Agent(
             task=prompt,
@@ -135,17 +109,21 @@ Summarize the article in less than 20 words."""
             logger.warning(f"Failed to create GIF: {gif_error}")
             gif_relative_path = None
 
-        # Clean the response
-        cleaned_result = clean_response(result)
+        # Extract title and summary
+        title, summary = extract_title_and_summary(result)
+
+        # Log the extracted information for debugging
+        logger.info(f"Extracted title: {title}")
+        logger.info(f"Extracted summary: {summary}")
 
         # Prepare the response
         response_data = {
-            "result": cleaned_result,
-            "status": "success",
+            "title": title,
+            "summary": summary,
             "gif_path": gif_relative_path,
         }
 
-        logger.info(f"Task completed successfully")
+        logger.info("Task completed successfully")
         return response_data
 
     except Exception as e:
