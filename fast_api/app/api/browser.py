@@ -1,9 +1,10 @@
 import os
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
+from typing import Optional, List, Dict, Any
 from browser_use import Agent, Browser, BrowserConfig
 from langchain_openai import ChatOpenAI
-import html2text
+from langchain.schema import SystemMessage, HumanMessage
 import logging
 from pathlib import Path
 from datetime import datetime
@@ -18,41 +19,110 @@ class BrowserTask(BaseModel):
     headless: bool = True
 
 
-def extract_title_and_summary(result: dict) -> tuple:
-    """Extract both the article title and summary from the browser result."""
-    title = None
-    summary = None
+class ArticleInfo(BaseModel):
+    """Structure for extracted article information"""
 
-    if isinstance(result, dict):
-        # Get title from history
-        if "history" in result:
-            for step in reversed(result["history"]):
-                if "state" in step and "tabs" in step["state"]:
-                    for tab in step["state"]["tabs"]:
-                        if "title" in tab and tab["title"]:
-                            title = tab["title"]
-                            break
-                    if title:
+    title: str = Field(description="The title of the article")
+    summary: str = Field(description="A brief summary of the article content")
+
+
+def extract_article_info(result) -> dict:
+    """Extract article information from browser result"""
+    try:
+        # Initialize default values
+        title = "Minnesota Weather Update"
+        summary = None
+
+        # Extract summary from the 'done' action result
+        if hasattr(result, "all_results"):
+            for action in reversed(result.all_results):
+                if getattr(action, "is_done", False) and getattr(
+                    action, "extracted_content", None
+                ):
+                    summary = getattr(action, "extracted_content", None)
+                    break
+
+        # If summary isn't found in all_results, try all_model_outputs
+        if not summary and hasattr(result, "all_model_outputs"):
+            for output in reversed(result.all_model_outputs):
+                if (
+                    isinstance(output, dict)
+                    and "done" in output
+                    and "text" in output["done"]
+                ):
+                    summary = output["done"]["text"]
+                    break
+
+        # If we found a summary, use it directly
+        if summary:
+            logger.info(f"Successfully extracted summary: {summary}")
+
+            # Try to extract location from summary
+            location_prefix = ""
+            if "minnesota" in summary.lower():
+                location_prefix = "Minnesota "
+
+            # Determine type of weather update based on summary content
+            weather_type = "Weather Update"
+            if any(term in summary.lower() for term in ["wind", "gust"]):
+                weather_type = "Wind Advisory"
+            elif any(
+                term in summary.lower() for term in ["rain", "shower", "precipitation"]
+            ):
+                weather_type = "Rain Forecast"
+            elif any(
+                term in summary.lower() for term in ["snow", "flurry", "blizzard"]
+            ):
+                weather_type = "Snow Forecast"
+            elif any(term in summary.lower() for term in ["cold", "chill", "freez"]):
+                weather_type = "Cold Weather Alert"
+            elif any(term in summary.lower() for term in ["warm", "hot", "heat"]):
+                weather_type = "Warm Weather Forecast"
+            elif any(
+                term in summary.lower() for term in ["storm", "thunder", "lightning"]
+            ):
+                weather_type = "Storm Warning"
+
+            # Construct a title based on the summary content
+            title = f"{location_prefix}{weather_type}"
+
+            return {"title": title, "summary": summary}
+
+        # If we failed to find a summary, try to determine what search was conducted
+        search_query = None
+        if hasattr(result, "all_results"):
+            for action in result.all_results:
+                content = getattr(action, "extracted_content", "")
+                if content and 'Input "' in content and '" into index' in content:
+                    # Extract search query
+                    start_idx = content.find('Input "') + 7
+                    end_idx = content.find('" into index')
+                    if start_idx > 7 and end_idx > start_idx:
+                        search_query = content[start_idx:end_idx]
                         break
 
-        # Get summary from last done action
-        if "history" in result:
-            for step in reversed(result["history"]):
-                if "model_output" in step and "action" in step["model_output"]:
-                    for action in step["model_output"]["action"]:
-                        if isinstance(action, dict) and "done" in action:
-                            if "text" in action["done"]:
-                                summary = action["done"]["text"]
-                                break
-                    if summary:
-                        break
+        if search_query:
+            title = f"{search_query.title()} Update"
+            default_summary = (
+                f"Information about {search_query} could not be retrieved."
+            )
+        else:
+            title = "Weather Update"
+            default_summary = "Could not extract weather information."
 
-    return title, summary
+        return {"title": title, "summary": summary if summary else default_summary}
+
+    except Exception as e:
+        logger.error(f"Error extracting article info: {e}", exc_info=True)
+        # Return default values in case of error
+        return {
+            "title": "Minnesota Weather Update",
+            "summary": "Weather information could not be retrieved.",
+        }
 
 
 @browser.post("/execute_task/")
 async def execute_task(browser_task: BrowserTask):
-    logger.info(f"Received browser task: {browser_task.task}")
     try:
         # Create screenshots directory if it doesn't exist
         screenshots_dir = Path("/var/log/screenshots")
@@ -78,14 +148,12 @@ async def execute_task(browser_task: BrowserTask):
         logger.info("Setting up OpenAI model...")
         model = ChatOpenAI(
             api_key=os.getenv("OPENAI_API_KEY"),
-            model=os.getenv("OPENAI_MODEL", "gpt-4"),
+            model=os.getenv("OPENAI_MODEL", "gpt-4o"),
+            verbose=False,
         )
 
         prompt = browser_task.task.strip()
-        # {
-        #   "task": "go to https://news.google.com/home?hl=en-US&gl=US&ceid=US:en.  wait for page to load.  Go to search bar, type in Donald Trump and click enter.  Wait for page to load.  The click on the first article listed.  Wait for page to load.  Summarize the article in less than 20 words.",
-        #   "headless": true
-        # }
+
         logger.info("Creating agent...")
         agent = Agent(
             task=prompt,
@@ -104,23 +172,38 @@ async def execute_task(browser_task: BrowserTask):
             # Save GIF to file
             agent.create_history_gif(output_path=str(gif_path))
             gif_relative_path = f"screenshots/task_history_{timestamp}.gif"
-            logger.info(f"Created GIF at {gif_path}")
         except Exception as gif_error:
             logger.warning(f"Failed to create GIF: {gif_error}")
             gif_relative_path = None
 
-        # Extract title and summary
-        title, summary = extract_title_and_summary(result)
+        # Log the raw result for debugging
+        logger.info(f"Task result: {result}")
 
-        # Log the extracted information for debugging
-        logger.info(f"Extracted title: {title}")
-        logger.info(f"Extracted summary: {summary}")
+        """
+        class InventoryQuery(BaseModel):
+    make: str = Field(description="The make of the car")
+    model: Optional[str] = Field(description="The model of the car")
+    year: Optional[str] = Field(description="The year of the car")
+            structured_llm = llm.with_structured_output(InventoryQuery)
+        car_info = structured_llm.invoke(messages)
+    """
 
+        class ExtractWebsiteInfo(BaseModel):
+            title: str = Field(description="The title of the website")
+            summary: str = Field(description="A brief summary of the website content")
+
+        structured_llm = model.with_structured_output(ExtractWebsiteInfo)
+        messages = [
+            SystemMessage(
+                content="You are a helpful assistant that extracts information from websites."
+            ),
+            HumanMessage(content=str(result)),
+        ]
+        article_info = structured_llm.invoke(messages)
         # Prepare the response
         response_data = {
-            "title": title,
-            "summary": summary,
-            "gif_path": gif_relative_path,
+            "article_title": article_info.title,
+            "article_summary": article_info.summary,
         }
 
         logger.info("Task completed successfully")
