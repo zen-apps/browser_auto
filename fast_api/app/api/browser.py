@@ -19,108 +19,6 @@ class BrowserTask(BaseModel):
     headless: bool = True
 
 
-class ArticleInfo(BaseModel):
-    """Structure for extracted article information"""
-
-    title: str = Field(description="The title of the article")
-    summary: str = Field(description="A brief summary of the article content")
-
-
-def extract_article_info(result) -> dict:
-    """Extract article information from browser result"""
-    try:
-        # Initialize default values
-        title = "Minnesota Weather Update"
-        summary = None
-
-        # Extract summary from the 'done' action result
-        if hasattr(result, "all_results"):
-            for action in reversed(result.all_results):
-                if getattr(action, "is_done", False) and getattr(
-                    action, "extracted_content", None
-                ):
-                    summary = getattr(action, "extracted_content", None)
-                    break
-
-        # If summary isn't found in all_results, try all_model_outputs
-        if not summary and hasattr(result, "all_model_outputs"):
-            for output in reversed(result.all_model_outputs):
-                if (
-                    isinstance(output, dict)
-                    and "done" in output
-                    and "text" in output["done"]
-                ):
-                    summary = output["done"]["text"]
-                    break
-
-        # If we found a summary, use it directly
-        if summary:
-            logger.info(f"Successfully extracted summary: {summary}")
-
-            # Try to extract location from summary
-            location_prefix = ""
-            if "minnesota" in summary.lower():
-                location_prefix = "Minnesota "
-
-            # Determine type of weather update based on summary content
-            weather_type = "Weather Update"
-            if any(term in summary.lower() for term in ["wind", "gust"]):
-                weather_type = "Wind Advisory"
-            elif any(
-                term in summary.lower() for term in ["rain", "shower", "precipitation"]
-            ):
-                weather_type = "Rain Forecast"
-            elif any(
-                term in summary.lower() for term in ["snow", "flurry", "blizzard"]
-            ):
-                weather_type = "Snow Forecast"
-            elif any(term in summary.lower() for term in ["cold", "chill", "freez"]):
-                weather_type = "Cold Weather Alert"
-            elif any(term in summary.lower() for term in ["warm", "hot", "heat"]):
-                weather_type = "Warm Weather Forecast"
-            elif any(
-                term in summary.lower() for term in ["storm", "thunder", "lightning"]
-            ):
-                weather_type = "Storm Warning"
-
-            # Construct a title based on the summary content
-            title = f"{location_prefix}{weather_type}"
-
-            return {"title": title, "summary": summary}
-
-        # If we failed to find a summary, try to determine what search was conducted
-        search_query = None
-        if hasattr(result, "all_results"):
-            for action in result.all_results:
-                content = getattr(action, "extracted_content", "")
-                if content and 'Input "' in content and '" into index' in content:
-                    # Extract search query
-                    start_idx = content.find('Input "') + 7
-                    end_idx = content.find('" into index')
-                    if start_idx > 7 and end_idx > start_idx:
-                        search_query = content[start_idx:end_idx]
-                        break
-
-        if search_query:
-            title = f"{search_query.title()} Update"
-            default_summary = (
-                f"Information about {search_query} could not be retrieved."
-            )
-        else:
-            title = "Weather Update"
-            default_summary = "Could not extract weather information."
-
-        return {"title": title, "summary": summary if summary else default_summary}
-
-    except Exception as e:
-        logger.error(f"Error extracting article info: {e}", exc_info=True)
-        # Return default values in case of error
-        return {
-            "title": "Minnesota Weather Update",
-            "summary": "Weather information could not be retrieved.",
-        }
-
-
 @browser.post("/execute_task/")
 async def execute_task(browser_task: BrowserTask):
     try:
@@ -128,8 +26,14 @@ async def execute_task(browser_task: BrowserTask):
         screenshots_dir = Path("/var/log/screenshots")
         screenshots_dir.mkdir(exist_ok=True, parents=True)
 
+        # override the task with the one from the request, which is basically the prompt
+        browser_task = {
+            "task": "go to https://importyeti.com.  wait for page to load.  Click on the button in upper right hand corner, click the 'sign up for free' button.  The when that opens, click 'Already have an account? Sign in' then enter 'joshjanzen@gmail.com' in Email input.  In the Password input, enter 'PKVh9W9/wVd#*j/'.  Go to search bar, type in 'Hormel Foods' and click enter.  Wait for page to load.  The click on the first result listed.  Wait for page to load.  Go to 'Hormal Foods' Suppliers section.  Copy all data in the secton and return as JSON",
+            "headless": True,
+        }
+
         browser_config = BrowserConfig(
-            headless=browser_task.headless,
+            headless=browser_task["headless"],
             extra_chromium_args=[
                 "--disable-web-security",
                 "--disable-gpu",
@@ -152,7 +56,7 @@ async def execute_task(browser_task: BrowserTask):
             verbose=False,
         )
 
-        prompt = browser_task.task.strip()
+        prompt = browser_task["task"].strip()
 
         logger.info("Creating agent...")
         agent = Agent(
@@ -178,15 +82,6 @@ async def execute_task(browser_task: BrowserTask):
 
         # Log the raw result for debugging
         logger.info(f"Task result: {result}")
-
-        """
-        class InventoryQuery(BaseModel):
-    make: str = Field(description="The make of the car")
-    model: Optional[str] = Field(description="The model of the car")
-    year: Optional[str] = Field(description="The year of the car")
-            structured_llm = llm.with_structured_output(InventoryQuery)
-        car_info = structured_llm.invoke(messages)
-    """
 
         class ExtractWebsiteInfo(BaseModel):
             title: str = Field(description="The title of the website")
