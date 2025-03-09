@@ -15,7 +15,7 @@ browser = APIRouter()
 
 
 class BrowserTask(BaseModel):
-    task: str
+    company_name: str
     headless: bool = True
 
 
@@ -26,14 +26,23 @@ async def execute_task(browser_task: BrowserTask):
         screenshots_dir = Path("/var/log/screenshots")
         screenshots_dir.mkdir(exist_ok=True, parents=True)
 
-        # override the task with the one from the request, which is basically the prompt
-        browser_task = {
-            "task": "go to https://importyeti.com.  wait for page to load.  Click on the button in upper right hand corner, click the 'sign up for free' button.  The when that opens, click 'Already have an account? Sign in' then enter 'joshjanzen@gmail.com' in Email input.  In the Password input, enter 'PKVh9W9/wVd#*j/'.  Go to search bar, type in 'Hormel Foods' and click enter.  Wait for page to load.  The click on the first result listed.  Wait for page to load.  Go to 'Hormal Foods' Suppliers section.  Copy all data in the secton and return as JSON",
-            "headless": True,
+        browser_task_dict = {
+            "task": f"""
+            go to https://importyeti.com.
+            wait for page to load completely.
+            
+            Go to search bar, type in {browser_task.company_name} and click enter.
+            Wait for page to load.
+            Click on the first result listed.
+            Wait for page to load.
+            Go to '{browser_task.company_name}' Suppliers section.
+            Copy all data in the section and return as JSON
+            """,
+            "headless": browser_task.headless,  # Use attribute notation here too
         }
 
         browser_config = BrowserConfig(
-            headless=browser_task["headless"],
+            headless=browser_task_dict["headless"],
             extra_chromium_args=[
                 "--disable-web-security",
                 "--disable-gpu",
@@ -56,7 +65,7 @@ async def execute_task(browser_task: BrowserTask):
             verbose=False,
         )
 
-        prompt = browser_task["task"].strip()
+        prompt = browser_task_dict["task"].strip()
 
         logger.info("Creating agent...")
         agent = Agent(
@@ -84,8 +93,21 @@ async def execute_task(browser_task: BrowserTask):
         logger.info(f"Task result: {result}")
 
         class ExtractWebsiteInfo(BaseModel):
-            title: str = Field(description="The title of the website")
-            summary: str = Field(description="A brief summary of the website content")
+            suppliers: List[str] = Field(
+                description="Names of suppliers for Hormel Foods"
+            )
+            countries: List[str] = Field(
+                description="Countries where suppliers are located"
+            )
+            shipment_activity: str = Field(
+                description="Time period of shipment activity"
+            )
+            total_shipments: List[int] = Field(
+                description="Number of shipments per supplier"
+            )
+            product_descriptions: List[str] = Field(
+                description="Product descriptions for each supplier"
+            )
 
         structured_llm = model.with_structured_output(ExtractWebsiteInfo)
         messages = [
@@ -97,8 +119,13 @@ async def execute_task(browser_task: BrowserTask):
         article_info = structured_llm.invoke(messages)
         # Prepare the response
         response_data = {
-            "article_title": article_info.title,
-            "article_summary": article_info.summary,
+            "suppliers": article_info.suppliers,
+            "countries": article_info.countries,
+            "shipment_activity": article_info.shipment_activity,
+            "total_shipments": article_info.total_shipments,
+            "product_descriptions": article_info.product_descriptions,
+            "gif_path": gif_relative_path,
+            "raw_result": result,
         }
 
         logger.info("Task completed successfully")
