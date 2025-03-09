@@ -180,3 +180,5 @@ config/*.env
 .idea/
 .vscode/
 *.gif
+*.png 
+*.json
