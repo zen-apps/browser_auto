@@ -1,0 +1,24 @@
+version: '3.3'
+
+services:
+  fast_api_backend:
+    restart: unless-stopped
+    build: 
+      context: ./fast_api
+      dockerfile: Dockerfile
+    env_file:
+      - ./config/dev.env
+    environment:
+      - PYTHONPATH=/app
+      - DISPLAY=:99
+      - HEADLESS=true
+      - PYTHONUNBUFFERED=1
+    volumes:
+      - ./fast_api/app:/app/app
+      - ./logs:/var/log
+      - ./logs/screenshots:/var/log/screenshots  # Mount screenshots directory
+    ports:
+      - "1099:8000"
+    shm_size: '2gb'
+    cap_add:
+      - SYS_ADMIN
